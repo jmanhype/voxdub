@@ -1,0 +1,99 @@
+.result-preview {
+    text-align: center;
+    padding: var(--space-2xl) 0;
+  }
+  
+  .result-header {
+    margin-bottom: var(--space-2xl);
+  }
+  
+  .success-icon {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto var(--space-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: rgba(5, 150, 105, 0.1);
+    color: var(--color-success);
+    border-radius: var(--radius-xl);
+    font-size: 32px;
+    border: 2px solid var(--color-success);
+  }
+  
+  .result-title {
+    font-size: 1.75rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin-bottom: var(--space-sm);
+  }
+  
+  .result-subtitle {
+    font-size: 14px;
+    color: var(--color-text-secondary);
+  }
+  
+  /* Result Info Grid */
+  .result-info {
+    margin-bottom: var(--space-2xl);
+    padding: var(--space-xl);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+  }
+  
+  .info-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: var(--space-lg);
+  }
+  
+  .info-item {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+    text-align: left;
+  }
+  
+  .info-label {
+    font-size: 12px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--color-text-tertiary);
+  }
+  
+  .info-value {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+  }
+  
+  /* Result Actions */
+  .result-actions {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    margin-bottom: var(--space-xl);
+  }
+  
+  /* Result Footer */
+  .result-footer {
+    padding: var(--space-md);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+  
+  .footer-text {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    margin: 0;
+  }
+  
+  @media (max-width: 640px) {
+    .info-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+  

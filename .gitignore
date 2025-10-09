@@ -1,0 +1,113 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# AI Models & Checkpoints (too large for GitHub)
+*.pth
+*.pt
+*.bin
+*.onnx
+*.h5
+*.pb
+*.safetensors
+*.msgpack
+Wav2Lip/checkpoints/
+backend/Wav2Lip/checkpoints/
+models/checkpoints/
+
+# Uploaded & Processed Videos
+uploads/
+outputs/
+temp/
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# Audio Files
+*.wav
+*.mp3
+*.flac
+*.aac
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
+.vite/
+.cache/
+
+# Environment Variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS Generated
+Thumbs.db
+desktop.ini
+.AppleDouble
+.LSOverride
+
+# Logs
+*.log
+logs/
+pip-log.txt
+
+# Testing
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Jupyter Notebooks
+.ipynb_checkpoints
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary Files
+tmp/
+*.tmp
+*.bak
+*.cache

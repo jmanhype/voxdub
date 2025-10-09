@@ -1,0 +1,14 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+torch==2.1.0
+torchvision==0.16.0
+torchaudio==2.1.0
+transformers==4.35.2
+opencv-python==4.8.1.78
+librosa==0.10.1
+soundfile==0.12.1
+scipy==1.11.4
+pillow==10.1.0
+TTS==0.21.1
+openai-whisper==20231117

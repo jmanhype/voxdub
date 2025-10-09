@@ -1,0 +1,133 @@
+.processing-status {
+    text-align: center;
+    padding: var(--space-2xl) 0;
+  }
+  
+  .status-header {
+    margin-bottom: var(--space-2xl);
+  }
+  
+  .status-icon {
+    width: 64px;
+    height: 64px;
+    margin: 0 auto var(--space-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--color-primary-light);
+    color: var(--color-primary);
+    border-radius: var(--radius-xl);
+    font-size: 32px;
+  }
+  
+  .status-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--color-text-primary);
+    margin-bottom: var(--space-sm);
+  }
+  
+  .status-subtitle {
+    font-size: 14px;
+    color: var(--color-text-secondary);
+  }
+  
+  /* Professional Progress Bar */
+  .progress-bar-container {
+    width: 100%;
+    height: 6px;
+    background-color: var(--color-border);
+    border-radius: var(--radius-full);
+    overflow: hidden;
+    margin-bottom: var(--space-sm);
+  }
+  
+  .progress-bar-fill {
+    height: 100%;
+    background-color: var(--color-primary);
+    border-radius: var(--radius-full);
+    transition: width 0.3s ease;
+  }
+  
+  .progress-text {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--color-primary);
+    margin-bottom: var(--space-2xl);
+  }
+  
+  /* Steps List - Clean */
+  .steps-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+    margin-bottom: var(--space-2xl);
+    text-align: left;
+  }
+  
+  .step-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-md);
+    padding: var(--space-md);
+    border-radius: var(--radius-md);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    transition: all var(--transition-base);
+  }
+  
+  .step-item.complete {
+    border-color: var(--color-success);
+    background-color: transparent;
+  }
+  
+  .step-item.complete .step-indicator {
+    background-color: var(--color-success);
+    color: white;
+  }
+  
+  .step-item.current {
+    border-color: var(--color-primary);
+    background-color: var(--color-primary-light);
+  }
+  
+  .step-item.current .step-indicator {
+    background-color: var(--color-primary);
+    color: white;
+  }
+  
+  .step-item.pending {
+    opacity: 0.5;
+  }
+  
+  .step-indicator {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--color-border);
+    border-radius: var(--radius-md);
+    font-size: 14px;
+  }
+  
+  .step-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--color-text-primary);
+  }
+  
+  /* Info Box */
+  .status-info {
+    padding: var(--space-md);
+    background-color: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+  
+  .info-text {
+    font-size: 13px;
+    color: var(--color-text-secondary);
+    margin: 0;
+  }
+  
