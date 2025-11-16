@@ -429,20 +429,27 @@ def get_synthesizer(
     fish_api_key: Optional[str] = None
 ) -> VoiceSynthesizer:
     """
-    Get or create global synthesizer instance
+    Get or create synthesizer instance
+
+    If a provider is specified, creates a new instance for that request.
+    Otherwise, returns a cached global instance.
 
     Args:
-        provider: Override global provider preference
+        provider: Provider for this request (creates new instance)
         fish_api_key: Fish Audio API key
 
     Returns:
         VoiceSynthesizer instance
     """
     global _synthesizer
-    provider = provider or _provider_preference
 
+    # If provider is explicitly specified, create a fresh instance for this request
+    if provider is not None:
+        return VoiceSynthesizer(provider=provider, fish_api_key=fish_api_key)
+
+    # Otherwise, use global singleton pattern
     if _synthesizer is None:
-        _synthesizer = VoiceSynthesizer(provider=provider, fish_api_key=fish_api_key)
+        _synthesizer = VoiceSynthesizer(provider=_provider_preference, fish_api_key=fish_api_key)
     return _synthesizer
 
 def synthesize_speech(

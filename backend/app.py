@@ -118,6 +118,12 @@ def get_supported_languages():
 @app.get("/api/tts/providers")
 def get_tts_providers():
     """Get available TTS providers and current selection"""
+    from models.voice_synthesis import FISH_AUDIO_AVAILABLE
+    import os
+
+    # Check if Fish Audio is actually available (SDK installed + API key present)
+    is_fish_audio_available = FISH_AUDIO_AVAILABLE and bool(os.getenv("FISH_API_KEY"))
+
     try:
         synthesizer = get_synthesizer()
         provider_info = synthesizer.get_provider_info()
@@ -128,7 +134,7 @@ def get_tts_providers():
                     "name": "Fish Audio",
                     "features": ["voice_cloning", "multi_language", "cloud_based", "high_quality"],
                     "requires_api_key": True,
-                    "available": provider_info.get("provider") == "fish_audio"
+                    "available": is_fish_audio_available
                 },
                 "coqui": {
                     "name": "Coqui TTS",
@@ -140,12 +146,13 @@ def get_tts_providers():
             "current": provider_info
         }
     except Exception as e:
+        logger.error(f"Error getting TTS providers: {e}")
         return {
             "providers": {
-                "fish_audio": {"name": "Fish Audio", "available": False, "requires_api_key": True},
+                "fish_audio": {"name": "Fish Audio", "available": is_fish_audio_available, "requires_api_key": True},
                 "coqui": {"name": "Coqui TTS", "available": True, "requires_api_key": False}
             },
-            "current": {"provider": "unknown", "error": str(e)}
+            "current": {"provider": "unknown", "status": "error"}
         }
 
 @app.post("/api/tts/provider")
@@ -160,14 +167,26 @@ def set_tts_provider_endpoint(provider: str):
         raise HTTPException(400, "Invalid provider. Choose 'auto', 'fish_audio', or 'coqui'")
 
     try:
+        # Validate provider is usable before setting it
+        test_synthesizer = get_synthesizer(provider=provider)
+
+        # If validation succeeds, set it as global default
         set_tts_provider(provider)
+
         return {
             "success": True,
             "message": f"TTS provider set to: {provider}",
             "provider": provider
         }
+    except ValueError as e:
+        logger.error(f"Provider validation failed: {e}")
+        raise HTTPException(400, f"Cannot use provider '{provider}': Configuration error")
+    except ImportError as e:
+        logger.error(f"Provider not available: {e}")
+        raise HTTPException(400, f"Provider '{provider}' is not available. Please install required dependencies.")
     except Exception as e:
-        raise HTTPException(500, f"Failed to set TTS provider: {str(e)}")
+        logger.error(f"Failed to set TTS provider: {e}")
+        raise HTTPException(500, "Failed to set TTS provider. Check server logs for details.")
 
 async def process_video_job(job_id: str, video_path: Path, target_language: str, tts_provider: Optional[str] = None):
     """Background task for video processing with TTS provider support"""
@@ -265,8 +284,11 @@ async def dub_video(
         # Generate unique job ID
         job_id = str(uuid.uuid4())
 
-        # Save uploaded video
-        video_path = UPLOAD_DIR / f"{job_id}_{video.filename}"
+        # Sanitize filename to prevent path traversal
+        safe_filename = Path(video.filename).name  # Extracts just the filename, removes any path components
+
+        # Save uploaded video with sanitized filename
+        video_path = UPLOAD_DIR / f"{job_id}_{safe_filename}"
         with open(video_path, "wb") as buffer:
             shutil.copyfileobj(video.file, buffer)
 
@@ -274,7 +296,7 @@ async def dub_video(
         jobs[job_id] = {
             "job_id": job_id,
             "status": JobStatus.QUEUED,
-            "filename": video.filename,
+            "filename": safe_filename,  # Use sanitized filename
             "target_language": target_language,
             "tts_provider": tts_provider or "auto",
             "created_at": datetime.now().isoformat(),
