@@ -13,7 +13,7 @@ from datetime import datetime
 # Import our models
 from models.transcription import transcribe_audio
 from models.translation import translate_text
-from models.voice_synthesis import synthesize_speech, set_tts_provider, get_synthesizer
+from models.voice_synthesis import synthesize_speech, get_synthesizer
 from models.lipsync import sync_lips
 from utils.video_processor import extract_audio, merge_audio_video
 from utils.file_handler import cleanup_temp_files, ensure_directories
@@ -70,6 +70,7 @@ def read_root():
             "status": "/api/status/{job_id} (GET)",
             "download": "/api/download/{job_id} (GET)",
             "languages": "/api/languages (GET)",
+            "tts_providers": "/api/tts/providers (GET)",
             "docs": "/docs"
         }
     }
@@ -154,39 +155,6 @@ def get_tts_providers():
             },
             "current": {"provider": "unknown", "status": "error"}
         }
-
-@app.post("/api/tts/provider")
-def set_tts_provider_endpoint(provider: str):
-    """
-    Set the preferred TTS provider
-
-    Args:
-        provider: "auto", "fish_audio", or "coqui"
-    """
-    if provider not in ["auto", "fish_audio", "coqui"]:
-        raise HTTPException(400, "Invalid provider. Choose 'auto', 'fish_audio', or 'coqui'")
-
-    try:
-        # Validate provider is usable before setting it
-        test_synthesizer = get_synthesizer(provider=provider)
-
-        # If validation succeeds, set it as global default
-        set_tts_provider(provider)
-
-        return {
-            "success": True,
-            "message": f"TTS provider set to: {provider}",
-            "provider": provider
-        }
-    except ValueError as e:
-        logger.error(f"Provider validation failed: {e}")
-        raise HTTPException(400, f"Cannot use provider '{provider}': Configuration error")
-    except ImportError as e:
-        logger.error(f"Provider not available: {e}")
-        raise HTTPException(400, f"Provider '{provider}' is not available. Please install required dependencies.")
-    except Exception as e:
-        logger.error(f"Failed to set TTS provider: {e}")
-        raise HTTPException(500, "Failed to set TTS provider. Check server logs for details.")
 
 async def process_video_job(job_id: str, video_path: Path, target_language: str, tts_provider: Optional[str] = None):
     """Background task for video processing with TTS provider support"""

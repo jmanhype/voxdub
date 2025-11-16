@@ -408,34 +408,21 @@ class VoiceSynthesizer:
             return {"provider": "none", "status": "not_initialized"}
 
 
-# Global instances
+# Global singleton cache (stateless - only caches default provider from env)
 _synthesizer = None
-_provider_preference = "auto"  # Can be changed globally
-
-def set_tts_provider(provider: Literal["auto", "fish_audio", "coqui"]):
-    """
-    Set global TTS provider preference
-
-    Args:
-        provider: Preferred TTS provider
-    """
-    global _provider_preference, _synthesizer
-    _provider_preference = provider
-    _synthesizer = None  # Reset to reinitialize with new provider
-    logger.info(f"TTS provider preference set to: {provider}")
 
 def get_synthesizer(
     provider: Optional[Literal["auto", "fish_audio", "coqui"]] = None,
     fish_api_key: Optional[str] = None
 ) -> VoiceSynthesizer:
     """
-    Get or create synthesizer instance
+    Get or create synthesizer instance (stateless)
 
     If a provider is specified, creates a new instance for that request.
-    Otherwise, returns a cached global instance.
+    Otherwise, returns a cached instance using the TTS_PROVIDER env var.
 
     Args:
-        provider: Provider for this request (creates new instance)
+        provider: Provider for this request (creates new instance if specified)
         fish_api_key: Fish Audio API key
 
     Returns:
@@ -447,9 +434,10 @@ def get_synthesizer(
     if provider is not None:
         return VoiceSynthesizer(provider=provider, fish_api_key=fish_api_key)
 
-    # Otherwise, use global singleton pattern
+    # Otherwise, use global singleton with default from environment
     if _synthesizer is None:
-        _synthesizer = VoiceSynthesizer(provider=_provider_preference, fish_api_key=fish_api_key)
+        default_provider = os.getenv("TTS_PROVIDER", "auto")
+        _synthesizer = VoiceSynthesizer(provider=default_provider, fish_api_key=fish_api_key)
     return _synthesizer
 
 def synthesize_speech(

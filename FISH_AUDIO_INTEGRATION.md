@@ -101,18 +101,7 @@ GET /api/tts/providers
 }
 ```
 
-#### 2. Set TTS Provider Globally
-
-```bash
-POST /api/tts/provider
-Content-Type: application/json
-
-{
-  "provider": "fish_audio"
-}
-```
-
-#### 3. Process Video with Specific Provider
+#### 2. Process Video with Specific Provider
 
 ```bash
 POST /api/dub
@@ -142,13 +131,13 @@ tts_provider: fish_audio
 ### Python - Direct Usage
 
 ```python
-from models.voice_synthesis import synthesize_speech, set_tts_provider, get_synthesizer
+from models.voice_synthesis import synthesize_speech, get_synthesizer
+import os
 
-# Option 1: Set provider globally
-set_tts_provider("fish_audio")
-synthesize_speech("Hello world", "output.wav", language="en")
+# Option 1: Set default via environment variable (before server starts)
+os.environ["TTS_PROVIDER"] = "fish_audio"
 
-# Option 2: Specify per-request
+# Option 2: Specify per-request (recommended)
 synthesize_speech(
     "Hello world",
     "output.wav",
@@ -185,14 +174,7 @@ const data = await response.json();
 console.log('Available providers:', data.providers);
 console.log('Current provider:', data.current.provider);
 
-// Set global provider
-await fetch('http://localhost:8000/api/tts/provider', {
-  method: 'POST',
-  headers: {'Content-Type': 'application/json'},
-  body: JSON.stringify({provider: 'fish_audio'})
-});
-
-// Submit video with specific provider
+// Submit video with specific provider (per-request override)
 const formData = new FormData();
 formData.append('video', videoFile);
 formData.append('target_language', 'es');
@@ -434,19 +416,31 @@ python app.py
 
 **No code changes required!** The system automatically detects and uses Fish Audio.
 
-### Switching Between Providers
+### Switching Default Provider
 
-Runtime switching via API:
+To change the default provider, update the environment variable and restart:
+
+```bash
+# Update .env file
+echo "TTS_PROVIDER=fish_audio" >> .env
+
+# Restart the server
+pkill -f "python app.py"
+python app.py
+```
+
+Or for per-request overrides (no restart needed):
 ```python
-import requests
+# Each request can specify its own provider
+POST /api/dub
+  video: file.mp4
+  target_language: es
+  tts_provider: fish_audio  # This request uses Fish Audio
 
-# Switch to Fish Audio
-requests.post('http://localhost:8000/api/tts/provider',
-              json={'provider': 'fish_audio'})
-
-# Switch to Coqui
-requests.post('http://localhost:8000/api/tts/provider',
-              json={'provider': 'coqui'})
+POST /api/dub
+  video: file2.mp4
+  target_language: fr
+  tts_provider: coqui  # This request uses Coqui
 ```
 
 ---
