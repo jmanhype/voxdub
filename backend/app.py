@@ -13,16 +13,22 @@ from datetime import datetime
 # Import our models
 from models.transcription import transcribe_audio
 from models.translation import translate_text
-from models.voice_synthesis import synthesize_speech
+from models.voice_synthesis import synthesize_speech, get_synthesizer
 from models.lipsync import sync_lips
 from utils.video_processor import extract_audio, merge_audio_video
 from utils.file_handler import cleanup_temp_files, ensure_directories
 
+# Import routers
+from routers.fish_speech import router as fish_speech_router
+
 app = FastAPI(
     title="VoxDub - AI Video Dubbing API",
-    description="Professional AI-powered video dubbing with lip-sync",
-    version="1.0.0"
+    description="Professional AI-powered video dubbing with lip-sync and advanced TTS",
+    version="1.1.0"
 )
+
+# Include routers
+app.include_router(fish_speech_router)
 
 # CORS middleware
 app.add_middleware(
@@ -60,16 +66,25 @@ async def startup_event():
 
 @app.get("/")
 def read_root():
+    # Get active TTS provider
+    try:
+        synthesizer = get_synthesizer()
+        tts_provider = synthesizer.provider_name
+    except:
+        tts_provider = "unknown"
+
     return {
         "service": "VoxDub API",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "status": "online",
+        "tts_provider": tts_provider,
         "endpoints": {
             "health": "/api/health",
             "dub": "/api/dub (POST)",
             "status": "/api/status/{job_id} (GET)",
             "download": "/api/download/{job_id} (GET)",
             "languages": "/api/languages (GET)",
+            "fish_speech": "/api/fish-speech/* (Fish Speech TTS endpoints)",
             "docs": "/docs"
         }
     }
@@ -77,13 +92,23 @@ def read_root():
 @app.get("/api/health")
 def health_check():
     """Health check endpoint"""
+    # Get active TTS provider
+    try:
+        synthesizer = get_synthesizer()
+        tts_provider = synthesizer.provider_name
+        tts_status = "ready"
+    except Exception as e:
+        tts_provider = "unknown"
+        tts_status = f"error: {str(e)}"
+
     return {
         "status": "healthy",
         "timestamp": datetime.now().isoformat(),
         "services": {
             "whisper": "ready",
             "nllb_translation": "ready",
-            "coqui_tts": "ready",
+            "tts": tts_status,
+            "tts_provider": tts_provider,
             "wav2lip": "ready",
             "ffmpeg": "ready"
         }
@@ -242,6 +267,13 @@ def download_result(job_id: str):
     )
 
 if __name__ == "__main__":
+    # Get active TTS provider
+    try:
+        synthesizer = get_synthesizer()
+        tts_provider = synthesizer.provider_name.upper()
+    except:
+        tts_provider = "COQUI"
+
     print("\n" + "=" * 60)
     print("🎬 VoxDub - Professional AI Video Dubbing System")
     print("=" * 60)
@@ -253,10 +285,16 @@ if __name__ == "__main__":
     print("📊 Features:")
     print("   • Whisper AI Speech Recognition")
     print("   • NLLB Neural Translation")
-    print("   • Coqui TTS Voice Synthesis")
+    print(f"   • {tts_provider} TTS Voice Synthesis")
     print("   • Wav2Lip Lip Synchronization")
+    if tts_provider == "FISH_SPEECH":
+        print("\n🐟 Fish Speech TTS Active:")
+        print("   • Voice Cloning")
+        print("   • Emotion Synthesis")
+        print("   • SOTA Quality (WER: 0.008)")
+        print("   • Fish Speech API: /api/fish-speech/*")
     print("=" * 60 + "\n")
-    
+
     uvicorn.run(
         app,
         host="0.0.0.0",

@@ -1,165 +1,246 @@
 """
-Coqui TTS Voice Synthesis Module
-Generates natural-sounding speech from text
+Voice Synthesis Module with Multi-Provider Support
+Generates natural-sounding speech from text using various TTS engines
 """
 
-from TTS.api import TTS
+import os
 import torch
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import logging
+from .providers import TTSProvider, CoquiTTSProvider, FishSpeechProvider
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 class VoiceSynthesizer:
-    """Professional TTS with multi-language and voice cloning support"""
-    
-    # Available TTS models by language
-    TTS_MODELS = {
-        "en": "tts_models/en/ljspeech/tacotron2-DDC",
-        "es": "tts_models/es/mai/tacotron2-DDC",
-        "fr": "tts_models/fr/mai/tacotron2-DDC",
-        "de": "tts_models/de/thorsten/tacotron2-DDC",
-        "multi": "tts_models/multilingual/multi-dataset/your_tts"  # Multilingual fallback
+    """
+    Professional TTS with multi-provider support
+
+    Supported Providers:
+    - Coqui TTS: Original multi-language TTS
+    - Fish Speech: SOTA TTS with voice cloning and emotion support
+    """
+
+    PROVIDERS = {
+        "coqui": CoquiTTSProvider,
+        "fish_speech": FishSpeechProvider
     }
-    
-    def __init__(self, default_model: Optional[str] = None):
+
+    def __init__(
+        self,
+        provider: str = "coqui",
+        device: Optional[str] = None,
+        **provider_kwargs
+    ):
         """
-        Initialize TTS synthesizer
-        
+        Initialize TTS synthesizer with specified provider
+
         Args:
-            default_model: Specific TTS model to use
+            provider: TTS provider to use (coqui, fish_speech)
+            device: Computation device (cuda/cpu)
+            **provider_kwargs: Provider-specific initialization parameters
         """
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.default_model = default_model or self.TTS_MODELS["en"]
-        self.tts = None
-        self.current_model = None
-        
-        logger.info(f"Initializing TTS on {self.device}")
-    
-    def load_model(self, model_name: Optional[str] = None):
-        """Load TTS model"""
-        model_name = model_name or self.default_model
-        
-        # Only reload if different model
-        if self.tts is None or self.current_model != model_name:
-            try:
-                logger.info(f"Loading TTS model: {model_name}")
-                
-                self.tts = TTS(
-                    model_name=model_name,
-                    progress_bar=False,
-                    gpu=(self.device == "cuda")
-                )
-                
-                self.current_model = model_name
-                logger.info("✅ TTS model loaded successfully")
-                
-            except Exception as e:
-                logger.error(f"❌ Failed to load TTS model: {e}")
-                # Fallback to multilingual model
-                logger.info("⚠️  Trying multilingual fallback model...")
-                self.tts = TTS(
-                    model_name=self.TTS_MODELS["multi"],
-                    progress_bar=False,
-                    gpu=(self.device == "cuda")
-                )
-                self.current_model = self.TTS_MODELS["multi"]
-        
-        return self.tts
-    
-    def get_model_for_language(self, language: str) -> str:
-        """Select appropriate TTS model for language"""
-        return self.TTS_MODELS.get(language.lower(), self.TTS_MODELS["multi"])
-    
+        # Auto-detect device
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+
+        self.device = device
+        self.provider_name = provider.lower()
+
+        # Validate provider
+        if self.provider_name not in self.PROVIDERS:
+            raise ValueError(
+                f"Unknown TTS provider: {provider}. "
+                f"Available: {list(self.PROVIDERS.keys())}"
+            )
+
+        # Initialize provider
+        provider_class = self.PROVIDERS[self.provider_name]
+        self.provider: TTSProvider = provider_class(device=device, **provider_kwargs)
+
+        logger.info(f"Initialized VoiceSynthesizer with {self.provider_name} provider on {self.device}")
+
     def synthesize(
         self,
         text: str,
         output_path: str,
         language: str = "en",
         speaker: Optional[str] = None,
-        speed: float = 1.0
+        speed: float = 1.0,
+        **kwargs
     ) -> str:
         """
         Synthesize speech from text
-        
+
         Args:
             text: Text to convert to speech
             output_path: Path to save audio file
             language: Target language code
             speaker: Speaker voice (if multi-speaker model)
             speed: Speech speed multiplier
-        
+            **kwargs: Provider-specific parameters
+                Fish Speech:
+                    - emotion: Emotion marker (angry, sad, excited, etc.)
+                    - reference_audio: Path to reference audio for voice cloning
+                    - reference_text: Transcript of reference audio
+                    - streaming: Enable streaming mode
+
         Returns:
             Path to generated audio file
         """
-        try:
-            if not text or not text.strip():
-                raise ValueError("Empty text provided for synthesis")
-            
-            # Ensure output directory exists
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            
-            # Select model for language
-            model_name = self.get_model_for_language(language)
-            tts = self.load_model(model_name)
-            
-            logger.info(f"Synthesizing speech for '{language}'")
-            logger.info(f"Text length: {len(text)} characters")
-            
-            # Generate speech
-            if hasattr(tts, 'tts_to_file'):
-                tts.tts_to_file(
-                    text=text,
-                    file_path=output_path,
-                    speaker=speaker,
-                    language=language if "multilingual" in model_name else None
-                )
-            else:
-                # Alternative method for different TTS versions
-                wav = tts.tts(text=text, speaker=speaker)
-                tts.save_wav(wav, output_path)
-            
-            if not Path(output_path).exists():
-                raise FileNotFoundError("TTS failed to generate audio file")
-            
-            file_size = Path(output_path).stat().st_size / 1024  # KB
-            logger.info(f"✅ Speech synthesis complete")
-            logger.info(f"   Output: {Path(output_path).name}")
-            logger.info(f"   Size: {file_size:.1f} KB")
-            
-            return output_path
-            
-        except Exception as e:
-            logger.error(f"❌ Speech synthesis failed: {e}")
-            raise RuntimeError(f"TTS error: {e}")
+        return self.provider.synthesize(
+            text=text,
+            output_path=output_path,
+            language=language,
+            speaker=speaker,
+            speed=speed,
+            **kwargs
+        )
+
+    def load_model(self, model_name: Optional[str] = None):
+        """
+        Load TTS model
+
+        Args:
+            model_name: Specific model to load
+        """
+        return self.provider.load_model(model_name)
+
+    def get_supported_languages(self) -> List[str]:
+        """
+        Get list of supported languages for current provider
+
+        Returns:
+            List of language codes
+        """
+        return self.provider.get_supported_languages()
+
+    def get_available_voices(self) -> Dict[str, List[str]]:
+        """
+        Get available voices for current provider
+
+        Returns:
+            Dictionary mapping language codes to voice lists
+        """
+        return self.provider.get_available_voices()
+
+    def cleanup(self):
+        """Clean up provider resources"""
+        self.provider.cleanup()
+
+    # Fish Speech specific methods
+    def add_reference_voice(
+        self,
+        voice_id: str,
+        audio_path: str,
+        text: Optional[str] = None
+    ) -> bool:
+        """
+        Add a reference voice for voice cloning (Fish Speech only)
+
+        Args:
+            voice_id: Unique identifier for the voice
+            audio_path: Path to reference audio file
+            text: Optional transcript of the reference audio
+
+        Returns:
+            True if successful
+        """
+        if isinstance(self.provider, FishSpeechProvider):
+            return self.provider.add_reference_voice(voice_id, audio_path, text)
+        else:
+            logger.warning(f"Reference voice not supported by {self.provider_name}")
+            return False
+
+    def list_reference_voices(self) -> List[Dict[str, Any]]:
+        """
+        List available reference voices (Fish Speech only)
+
+        Returns:
+            List of reference voice information
+        """
+        if isinstance(self.provider, FishSpeechProvider):
+            return self.provider.list_reference_voices()
+        else:
+            logger.warning(f"Reference voices not supported by {self.provider_name}")
+            return []
+
+    def get_available_emotions(self) -> List[str]:
+        """
+        Get available emotion markers (Fish Speech only)
+
+        Returns:
+            List of emotion markers
+        """
+        if isinstance(self.provider, FishSpeechProvider):
+            return self.provider.get_available_emotions()
+        else:
+            logger.warning(f"Emotion markers not supported by {self.provider_name}")
+            return []
+
 
 # Global instance
 _synthesizer = None
+_current_provider = None
 
-def get_synthesizer() -> VoiceSynthesizer:
-    """Get or create global synthesizer instance"""
-    global _synthesizer
-    if _synthesizer is None:
-        _synthesizer = VoiceSynthesizer()
+
+def get_synthesizer(provider: Optional[str] = None, **kwargs) -> VoiceSynthesizer:
+    """
+    Get or create global synthesizer instance
+
+    Args:
+        provider: TTS provider to use
+        **kwargs: Provider-specific parameters
+
+    Returns:
+        VoiceSynthesizer instance
+    """
+    global _synthesizer, _current_provider
+
+    # Get provider from environment if not specified
+    if provider is None:
+        provider = os.getenv("TTS_PROVIDER", "coqui")
+
+    # Recreate if provider changed or doesn't exist
+    if _synthesizer is None or _current_provider != provider:
+        if _synthesizer is not None:
+            _synthesizer.cleanup()
+
+        # Get Fish Speech config from environment if using Fish Speech
+        if provider == "fish_speech":
+            kwargs.setdefault("api_url", os.getenv("FISH_SPEECH_API_URL", "http://localhost:8080"))
+            kwargs.setdefault("model", os.getenv("FISH_SPEECH_MODEL", "s1-mini"))
+            kwargs.setdefault("compile_mode", os.getenv("FISH_SPEECH_COMPILE", "False").lower() == "true")
+            kwargs.setdefault("max_new_tokens", int(os.getenv("FISH_SPEECH_MAX_NEW_TOKENS", "1024")))
+            kwargs.setdefault("top_p", float(os.getenv("FISH_SPEECH_TOP_P", "0.7")))
+            kwargs.setdefault("temperature", float(os.getenv("FISH_SPEECH_TEMPERATURE", "0.7")))
+            kwargs.setdefault("repetition_penalty", float(os.getenv("FISH_SPEECH_REPETITION_PENALTY", "1.2")))
+
+        _synthesizer = VoiceSynthesizer(provider=provider, **kwargs)
+        _current_provider = provider
+
     return _synthesizer
+
 
 def synthesize_speech(
     text: str,
     output_path: str,
-    language: str = "en"
+    language: str = "en",
+    **kwargs
 ) -> str:
     """
     Convenience function for speech synthesis
-    
+
     Args:
         text: Text to synthesize
         output_path: Output file path
         language: Target language
-    
+        **kwargs: Additional synthesis parameters
+
     Returns:
         Path to generated audio
     """
     synthesizer = get_synthesizer()
-    return synthesizer.synthesize(text, output_path, language)
+    return synthesizer.synthesize(text, output_path, language, **kwargs)
