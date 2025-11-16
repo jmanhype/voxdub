@@ -12,3 +12,7 @@ scipy==1.11.4
 pillow==10.1.0
 TTS==0.21.1
 openai-whisper==20231117
+
+# Fish Audio TTS (optional - requires API key)
+# Get your API key at: https://fish.audio/app/api-keys
+fish-audio-sdk>=1.0.0
