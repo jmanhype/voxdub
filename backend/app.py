@@ -9,20 +9,29 @@ from pathlib import Path
 from typing import Optional
 import asyncio
 from datetime import datetime
+import logging
 
 # Import our models
 from models.transcription import transcribe_audio
 from models.translation import translate_text
-from models.voice_synthesis import synthesize_speech, get_synthesizer
+from models.voice_synthesis import synthesize_speech, get_synthesizer, FISH_AUDIO_AVAILABLE
 from models.lipsync import sync_lips
 from utils.video_processor import extract_audio, merge_audio_video
 from utils.file_handler import cleanup_temp_files, ensure_directories
 
+# Import routers
+from routers.fish_speech import router as fish_speech_router
+
+logger = logging.getLogger(__name__)
+
 app = FastAPI(
     title="VoxDub - AI Video Dubbing API",
-    description="Professional AI-powered video dubbing with lip-sync",
-    version="1.0.0"
+    description="Professional AI-powered video dubbing with lip-sync and advanced TTS (3 providers: Coqui, Fish Audio, Fish Speech)",
+    version="1.2.0"
 )
+
+# Include routers
+app.include_router(fish_speech_router)
 
 # CORS middleware
 app.add_middleware(
@@ -60,10 +69,18 @@ async def startup_event():
 
 @app.get("/")
 def read_root():
+    # Get active TTS provider
+    try:
+        synthesizer = get_synthesizer()
+        tts_provider = synthesizer.provider_name
+    except:
+        tts_provider = "unknown"
+
     return {
         "service": "VoxDub API",
-        "version": "1.0.0",
+        "version": "1.2.0",
         "status": "online",
+        "tts_provider": tts_provider,
         "endpoints": {
             "health": "/api/health",
             "dub": "/api/dub (POST)",
@@ -71,6 +88,7 @@ def read_root():
             "download": "/api/download/{job_id} (GET)",
             "languages": "/api/languages (GET)",
             "tts_providers": "/api/tts/providers (GET)",
+            "fish_speech": "/api/fish-speech/* (Fish Speech TTS endpoints)",
             "docs": "/docs"
         }
     }
@@ -81,7 +99,8 @@ def health_check():
     try:
         synthesizer = get_synthesizer()
         tts_info = synthesizer.get_provider_info()
-    except Exception:
+    except Exception as e:
+        logger.error(f"Error getting TTS info: {e}")
         tts_info = {"provider": "unknown", "status": "not_initialized"}
 
     return {
@@ -119,11 +138,11 @@ def get_supported_languages():
 @app.get("/api/tts/providers")
 def get_tts_providers():
     """Get available TTS providers and current selection"""
-    from models.voice_synthesis import FISH_AUDIO_AVAILABLE
-    import os
-
     # Check if Fish Audio is actually available (SDK installed + API key present)
     is_fish_audio_available = FISH_AUDIO_AVAILABLE and bool(os.getenv("FISH_API_KEY"))
+
+    # Check if Fish Speech is configured
+    is_fish_speech_available = bool(os.getenv("FISH_SPEECH_API_URL"))
 
     try:
         synthesizer = get_synthesizer()
@@ -131,17 +150,24 @@ def get_tts_providers():
 
         return {
             "providers": {
-                "fish_audio": {
-                    "name": "Fish Audio",
-                    "features": ["voice_cloning", "multi_language", "cloud_based", "high_quality"],
-                    "requires_api_key": True,
-                    "available": is_fish_audio_available
-                },
                 "coqui": {
                     "name": "Coqui TTS",
                     "features": ["multi_language", "local_processing", "offline"],
                     "requires_api_key": False,
                     "available": True
+                },
+                "fish_audio": {
+                    "name": "Fish Audio SDK",
+                    "features": ["voice_cloning", "multi_language", "cloud_based", "high_quality"],
+                    "requires_api_key": True,
+                    "available": is_fish_audio_available
+                },
+                "fish_speech": {
+                    "name": "Fish Speech (Self-hosted)",
+                    "features": ["voice_cloning", "emotion_synthesis", "streaming", "multilingual", "self_hosted", "sota_quality"],
+                    "requires_api_key": False,
+                    "requires_server": True,
+                    "available": is_fish_speech_available
                 }
             },
             "current": provider_info
@@ -150,8 +176,9 @@ def get_tts_providers():
         logger.error(f"Error getting TTS providers: {e}")
         return {
             "providers": {
-                "fish_audio": {"name": "Fish Audio", "available": is_fish_audio_available, "requires_api_key": True},
-                "coqui": {"name": "Coqui TTS", "available": True, "requires_api_key": False}
+                "coqui": {"name": "Coqui TTS", "available": True, "requires_api_key": False},
+                "fish_audio": {"name": "Fish Audio SDK", "available": is_fish_audio_available, "requires_api_key": True},
+                "fish_speech": {"name": "Fish Speech", "available": is_fish_speech_available, "requires_server": True}
             },
             "current": {"provider": "unknown", "status": "error"}
         }
@@ -229,7 +256,7 @@ async def dub_video(
     background_tasks: BackgroundTasks,
     video: UploadFile = File(..., description="Video file to dub"),
     target_language: str = Form(..., description="Target language code (e.g., 'es', 'fr')"),
-    tts_provider: Optional[str] = Form(None, description="TTS provider: 'auto', 'fish_audio', 'coqui'")
+    tts_provider: Optional[str] = Form(None, description="TTS provider: 'auto', 'coqui', 'fish_audio', 'fish_speech'")
 ):
     """
     Main endpoint for video dubbing
@@ -238,7 +265,7 @@ async def dub_video(
     Args:
         video: Video file to dub
         target_language: Target language code
-        tts_provider: Optional TTS provider override (auto, fish_audio, coqui)
+        tts_provider: Optional TTS provider override (auto, coqui, fish_audio, fish_speech)
     """
     try:
         # Validate file
@@ -246,8 +273,8 @@ async def dub_video(
             raise HTTPException(400, "Only video files are supported (.mp4, .avi, .mov, .mkv)")
 
         # Validate TTS provider
-        if tts_provider and tts_provider not in ["auto", "fish_audio", "coqui"]:
-            raise HTTPException(400, "Invalid TTS provider. Choose 'auto', 'fish_audio', or 'coqui'")
+        if tts_provider and tts_provider not in ["auto", "coqui", "fish_audio", "fish_speech"]:
+            raise HTTPException(400, "Invalid TTS provider. Choose 'auto', 'coqui', 'fish_audio', or 'fish_speech'")
 
         # Generate unique job ID
         job_id = str(uuid.uuid4())
@@ -292,7 +319,7 @@ def get_job_status(job_id: str):
     """Get processing status of a job"""
     if job_id not in jobs:
         raise HTTPException(404, "Job not found")
-    
+
     return jobs[job_id]
 
 @app.get("/api/download/{job_id}")
@@ -300,17 +327,17 @@ def download_result(job_id: str):
     """Download the final dubbed video"""
     if job_id not in jobs:
         raise HTTPException(404, "Job not found")
-    
+
     job = jobs[job_id]
-    
+
     if job["status"] != JobStatus.COMPLETED:
         raise HTTPException(400, f"Job not completed. Current status: {job['status']}")
-    
+
     output_file = Path(job["output_file"])
-    
+
     if not output_file.exists():
         raise HTTPException(404, "Output file not found")
-    
+
     return FileResponse(
         path=output_file,
         filename=f"dubbed_{job['filename']}",
@@ -318,6 +345,13 @@ def download_result(job_id: str):
     )
 
 if __name__ == "__main__":
+    # Get active TTS provider
+    try:
+        synthesizer = get_synthesizer()
+        tts_provider = synthesizer.provider_name.upper()
+    except:
+        tts_provider = "COQUI"
+
     print("\n" + "=" * 60)
     print("🎬 VoxDub - Professional AI Video Dubbing System")
     print("=" * 60)
@@ -325,14 +359,30 @@ if __name__ == "__main__":
     print("✅ API Documentation: http://localhost:8000/docs")
     print("✅ Health Check: http://localhost:8000/api/health")
     print("✅ Supported Languages: http://localhost:8000/api/languages")
+    print("✅ TTS Providers: http://localhost:8000/api/tts/providers")
     print("=" * 60)
     print("📊 Features:")
     print("   • Whisper AI Speech Recognition")
     print("   • NLLB Neural Translation")
-    print("   • Coqui TTS Voice Synthesis")
+    print(f"   • {tts_provider} TTS Voice Synthesis")
     print("   • Wav2Lip Lip Synchronization")
+    print("\n🎤 Available TTS Providers:")
+    print("   • Coqui TTS (Local, free)")
+    print("   • Fish Audio SDK (Cloud, API key required)")
+    print("   • Fish Speech (Self-hosted, SOTA quality)")
+    if tts_provider == "FISH_SPEECH":
+        print("\n🐟 Fish Speech TTS Active:")
+        print("   • Voice Cloning")
+        print("   • Emotion Synthesis")
+        print("   • SOTA Quality (WER: 0.008)")
+        print("   • Fish Speech API: /api/fish-speech/*")
+    elif tts_provider == "FISH_AUDIO":
+        print("\n🐟 Fish Audio SDK Active:")
+        print("   • Cloud-based TTS")
+        print("   • Voice Cloning")
+        print("   • High Quality")
     print("=" * 60 + "\n")
-    
+
     uvicorn.run(
         app,
         host="0.0.0.0",

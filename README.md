@@ -21,7 +21,8 @@ Transform videos into any language with natural voice synthesis and perfect lip-
 
 - 🎙️ **Automatic Speech Recognition** - Powered by OpenAI Whisper (99 languages)
 - 🌍 **Neural Machine Translation** - Meta NLLB-200 (200+ languages)
-- 🗣️ **Natural Voice Synthesis** - High-quality Coqui TTS
+- 🗣️ **Natural Voice Synthesis** - Multiple TTS engines (Coqui TTS, Fish Speech)
+- 🐟 **Fish Speech TTS** - SOTA quality with voice cloning & emotion synthesis (WER: 0.008)
 - 💋 **Lip Synchronization** - Realistic Wav2Lip GAN
 - 📊 **Real-time Progress Tracking** - Live processing status updates
 - 🎨 **Professional UI/UX** - Clean, modern, responsive interface
@@ -235,10 +236,30 @@ text
 | **Whisper Base** | Speech→Text | 140MB | OpenAI | 95%+ |
 | **NLLB-200** | Translation | 2.5GB | Meta AI | 90%+ |
 | **Coqui TTS** | Text→Speech | 200MB | Coqui | 90%+ |
+| **Fish Speech S1** | Text→Speech (Advanced) | 2.8GB | FishAudio | 99%+ (WER: 0.008) |
 | **Wav2Lip GAN** | Lip Sync | 350MB | IISc | 95%+ |
 
-**Total Model Size:** ~3.2GB  
-**Supported Languages:** 200+  
+### TTS Engine Options
+
+**Coqui TTS** (Default):
+- Multi-language support (5 languages)
+- Lightweight (200MB)
+- Good quality (90%+ accuracy)
+
+**Fish Speech** (Advanced - Optional):
+- #1 on TTS-Arena2 benchmark
+- Voice cloning from 3-30s audio samples
+- 10+ emotion markers (happy, sad, angry, etc.)
+- Multilingual (English, Chinese, Japanese)
+- SOTA quality (WER: 0.008, CER: 0.004)
+- Requires 12GB VRAM (S1-mini model)
+- See [Fish Speech Integration Guide](docs/FISH_SPEECH_INTEGRATION.md)
+
+**Total Model Size:**
+- Standard: ~3.2GB (Coqui TTS)
+- Advanced: ~6GB (with Fish Speech)
+
+**Supported Languages:** 200+
 **Processing Speed:** 2-5 minutes per video
 
 ---
@@ -332,28 +353,58 @@ text
 
 ### Environment Variables (Optional)
 
-Create `.env` in `backend/` folder:
+Create `.env` in project root folder (copy from `.env.example`):
 
-Server Configuration
+```env
+# Server Configuration
 HOST=0.0.0.0
 PORT=8000
 DEBUG=False
 
-Model Configuration
+# Model Configuration
 WHISPER_MODEL=base
 NLLB_MODEL=facebook/nllb-200-distilled-600M
 TTS_MODEL=tts_models/multilingual/multi-dataset/your_tts
 
-File Limits
+# TTS Provider Selection
+TTS_PROVIDER=coqui  # Options: coqui, fish_speech
+
+# Fish Speech Configuration (Optional - for advanced TTS)
+FISH_SPEECH_API_URL=http://localhost:8080
+FISH_SPEECH_MODEL=s1-mini  # Options: s1, s1-mini
+FISH_SPEECH_DEVICE=cuda
+FISH_SPEECH_COMPILE=False
+
+# File Limits
 MAX_FILE_SIZE_MB=500
 ALLOWED_FORMATS=mp4,avi,mov,mkv
 AUTO_DELETE_HOURS=24
 
-Processing
+# Processing
 USE_GPU=True
 MAX_WORKERS=2
+```
 
-text
+### Fish Speech TTS Setup (Optional - Advanced Users)
+
+For state-of-the-art TTS with voice cloning:
+
+```bash
+# Run the automated setup script
+cd scripts
+chmod +x setup_fish_speech.sh
+./setup_fish_speech.sh
+
+# Start Fish Speech API server
+cd ~/fish-speech
+./start_api.sh
+
+# Configure VoxDub to use Fish Speech
+# Edit .env:
+TTS_PROVIDER=fish_speech
+```
+
+See the [Fish Speech Integration Guide](docs/FISH_SPEECH_INTEGRATION.md) for detailed setup and usage.
 
 ---
 
@@ -366,13 +417,25 @@ Once backend is running, visit:
 
 ### Key Endpoints
 
+**Core Endpoints:**
+```
 POST /api/dub - Upload video and start dubbing
 GET /api/status/{job_id} - Check processing status
 GET /api/download/{job_id} - Download processed video
 GET /api/languages - Get supported languages
 GET /api/health - Health check
+```
 
-text
+**Fish Speech TTS Endpoints** (when enabled):
+```
+GET /api/fish-speech/info - Fish Speech provider info
+GET /api/fish-speech/emotions - Available emotion markers
+POST /api/fish-speech/voices/add - Add reference voice for cloning
+GET /api/fish-speech/voices/list - List registered voices
+POST /api/fish-speech/synthesize - Generate speech with emotions
+POST /api/fish-speech/clone-voice - One-shot voice cloning
+GET /api/fish-speech/health - Check Fish Speech API status
+```
 
 ---
 
@@ -451,7 +514,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **OpenAI** - Whisper speech recognition model
 - **Meta AI** - NLLB translation model
-- **Coqui AI** - Text-to-speech system
+- **Coqui AI** - Text-to-speech system (default TTS)
+- **FishAudio** - Fish Speech state-of-the-art TTS with voice cloning
 - **IISc Bangalore** - Wav2Lip lip synchronization
 - **FFmpeg** - Video/audio processing
 - **Hugging Face** - Model hosting and transformers library

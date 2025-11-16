@@ -1,20 +1,21 @@
 """
-Voice Synthesis Module
-Supports multiple TTS providers: Coqui TTS and Fish Audio
-Generates natural-sounding speech from text
+Voice Synthesis Module with Multi-Provider Support
+Supports three TTS providers: Coqui TTS, Fish Audio SDK, and Fish Speech
+Generates natural-sounding speech from text using various TTS engines
 """
 
-from TTS.api import TTS
-import torch
-from pathlib import Path
-from typing import Optional, List, Literal
-import logging
 import os
+import torch
+import threading
+from pathlib import Path
+from typing import Optional, List, Dict, Any, Literal
+import logging
+from .providers import TTSProvider, CoquiTTSProvider, FishSpeechProvider
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Fish Audio imports (optional)
+# Fish Audio SDK imports (optional)
 try:
     from fishaudio import FishAudio, AsyncFishAudio
     from fishaudio.types import TTSConfig, Prosody
@@ -28,10 +29,11 @@ try:
     logger.info("✅ Fish Audio SDK available")
 except ImportError:
     FISH_AUDIO_AVAILABLE = False
-    logger.warning("⚠️  Fish Audio SDK not installed. Only Coqui TTS available.")
+    logger.warning("⚠️  Fish Audio SDK not installed. Only Coqui TTS and Fish Speech available.")
 
-class FishAudioSynthesizer:
-    """Fish Audio TTS provider with advanced voice cloning"""
+
+class FishAudioProvider(TTSProvider):
+    """Fish Audio SDK TTS provider with cloud-based voice cloning"""
 
     # Language support mapping
     LANGUAGE_SUPPORT = {
@@ -49,13 +51,16 @@ class FishAudioSynthesizer:
         "it": "Italian"
     }
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, device: str = "cuda", api_key: Optional[str] = None):
         """
         Initialize Fish Audio synthesizer
 
         Args:
+            device: Computation device (not used for cloud API)
             api_key: Fish Audio API key (or use FISH_API_KEY env var)
         """
+        super().__init__(device)
+
         if not FISH_AUDIO_AVAILABLE:
             raise ImportError(
                 "Fish Audio SDK not installed. Install with: pip install fish-audio-sdk"
@@ -71,15 +76,20 @@ class FishAudioSynthesizer:
         self.client = FishAudio(api_key=self.api_key)
         logger.info("✅ Fish Audio client initialized")
 
+    def load_model(self, model_name: Optional[str] = None) -> Any:
+        """Fish Audio models are cloud-based, no local loading needed"""
+        return True
+
     def synthesize(
         self,
         text: str,
         output_path: str,
         language: str = "en",
-        reference_id: Optional[str] = None,
+        speaker: Optional[str] = None,
         speed: float = 1.0,
         volume: int = 0,
-        audio_format: str = "wav"
+        audio_format: str = "wav",
+        **kwargs
     ) -> str:
         """
         Synthesize speech using Fish Audio
@@ -88,7 +98,7 @@ class FishAudioSynthesizer:
             text: Text to convert to speech
             output_path: Path to save audio file
             language: Target language code
-            reference_id: Fish Audio voice reference ID
+            speaker: Fish Audio voice reference ID (reference_id)
             speed: Speech speed multiplier (0.5 - 2.0)
             volume: Volume adjustment in dB (-20 to 20)
             audio_format: Output format ('wav' or 'mp3')
@@ -115,11 +125,11 @@ class FishAudioSynthesizer:
             )
 
             # Generate speech
-            if reference_id:
-                logger.info(f"   Using voice reference: {reference_id}")
+            if speaker:  # speaker is the reference_id for Fish Audio
+                logger.info(f"   Using voice reference: {speaker}")
                 audio_data = self.client.tts.convert(
                     text=text,
-                    reference_id=reference_id,
+                    reference_id=speaker,
                     config=config
                 )
             else:
@@ -174,277 +184,298 @@ class FishAudioSynthesizer:
             logger.error(f"Failed to get account info: {e}")
             return {"provider": "fish_audio", "status": "error", "error": str(e)}
 
+    def get_supported_languages(self) -> List[str]:
+        """Get supported languages"""
+        return list(self.LANGUAGE_SUPPORT.keys())
 
-class CoquiVoiceSynthesizer:
-    """Coqui TTS provider with multi-language support"""
+    def get_available_voices(self) -> Dict[str, List[str]]:
+        """Get available voices for Fish Audio"""
+        return {"fish_audio": ["default"]}
 
-    # Available TTS models by language
-    TTS_MODELS = {
-        "en": "tts_models/en/ljspeech/tacotron2-DDC",
-        "es": "tts_models/es/mai/tacotron2-DDC",
-        "fr": "tts_models/fr/mai/tacotron2-DDC",
-        "de": "tts_models/de/thorsten/tacotron2-DDC",
-        "multi": "tts_models/multilingual/multi-dataset/your_tts"  # Multilingual fallback
+    def cleanup(self):
+        """Clean up Fish Audio resources"""
+        logger.info("Fish Audio provider cleaned up")
+
+
+class VoiceSynthesizer:
+    """
+    Professional TTS with multi-provider support
+
+    Supported Providers:
+    - Coqui TTS: Local multi-language TTS
+    - Fish Audio SDK: Cloud-based TTS with API key
+    - Fish Speech: Self-hosted SOTA TTS with voice cloning and emotion support
+    """
+
+    PROVIDERS = {
+        "coqui": CoquiTTSProvider,
+        "fish_audio": FishAudioProvider,
+        "fish_speech": FishSpeechProvider
     }
 
-    def __init__(self, default_model: Optional[str] = None):
+    def __init__(
+        self,
+        provider: Literal["auto", "coqui", "fish_audio", "fish_speech"] = "auto",
+        device: Optional[str] = None,
+        **provider_kwargs
+    ):
         """
-        Initialize Coqui TTS synthesizer
+        Initialize TTS synthesizer with specified provider
 
         Args:
-            default_model: Specific TTS model to use
+            provider: TTS provider to use (auto, coqui, fish_audio, fish_speech)
+            device: Computation device (cuda/cpu)
+            **provider_kwargs: Provider-specific initialization parameters
+                Fish Audio: api_key
+                Fish Speech: api_url, model, compile_mode, etc.
         """
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.default_model = default_model or self.TTS_MODELS["en"]
-        self.tts = None
-        self.current_model = None
+        # Auto-detect device
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
 
-        logger.info(f"Initializing Coqui TTS on {self.device}")
-    
-    def load_model(self, model_name: Optional[str] = None):
-        """Load Coqui TTS model"""
-        model_name = model_name or self.default_model
+        self.device = device
+        self.provider_name = provider.lower()
 
-        # Only reload if different model
-        if self.tts is None or self.current_model != model_name:
-            try:
-                logger.info(f"Loading Coqui TTS model: {model_name}")
+        # Auto-select provider
+        if self.provider_name == "auto":
+            self.provider_name = self._auto_select_provider(provider_kwargs)
+            logger.info(f"Auto-selected provider: {self.provider_name}")
 
-                self.tts = TTS(
-                    model_name=model_name,
-                    progress_bar=False,
-                    gpu=(self.device == "cuda")
-                )
+        # Validate provider
+        if self.provider_name not in self.PROVIDERS:
+            raise ValueError(
+                f"Unknown TTS provider: {provider}. "
+                f"Available: {list(self.PROVIDERS.keys())}"
+            )
 
-                self.current_model = model_name
-                logger.info("✅ Coqui TTS model loaded successfully")
+        # Initialize provider
+        provider_class = self.PROVIDERS[self.provider_name]
+        self.provider: TTSProvider = provider_class(device=device, **provider_kwargs)
 
-            except Exception as e:
-                logger.error(f"❌ Failed to load Coqui TTS model: {e}")
-                # Fallback to multilingual model
-                logger.info("⚠️  Trying multilingual fallback model...")
-                self.tts = TTS(
-                    model_name=self.TTS_MODELS["multi"],
-                    progress_bar=False,
-                    gpu=(self.device == "cuda")
-                )
-                self.current_model = self.TTS_MODELS["multi"]
+        logger.info(f"Initialized VoiceSynthesizer with {self.provider_name} provider on {self.device}")
 
-        return self.tts
+    def _auto_select_provider(self, provider_kwargs: Dict) -> str:
+        """
+        Auto-select best available TTS provider
 
-    def get_model_for_language(self, language: str) -> str:
-        """Select appropriate Coqui TTS model for language"""
-        return self.TTS_MODELS.get(language.lower(), self.TTS_MODELS["multi"])
-    
+        Priority:
+        1. Fish Audio SDK (if API key available)
+        2. Fish Speech (if API URL configured)
+        3. Coqui TTS (fallback)
+        """
+        # Check Fish Audio SDK availability
+        if FISH_AUDIO_AVAILABLE:
+            api_key = provider_kwargs.get("api_key") or os.getenv("FISH_API_KEY")
+            if api_key:
+                logger.info("🐟 Fish Audio SDK available with API key")
+                return "fish_audio"
+
+        # Check Fish Speech availability
+        fish_speech_url = provider_kwargs.get("api_url") or os.getenv("FISH_SPEECH_API_URL")
+        if fish_speech_url:
+            logger.info("🐟 Fish Speech API URL configured")
+            return "fish_speech"
+
+        # Fallback to Coqui
+        logger.info("🎤 No cloud providers configured, using Coqui TTS")
+        return "coqui"
+
     def synthesize(
         self,
         text: str,
         output_path: str,
         language: str = "en",
         speaker: Optional[str] = None,
-        speed: float = 1.0
-    ) -> str:
-        """
-        Synthesize speech from text
-        
-        Args:
-            text: Text to convert to speech
-            output_path: Path to save audio file
-            language: Target language code
-            speaker: Speaker voice (if multi-speaker model)
-            speed: Speech speed multiplier
-        
-        Returns:
-            Path to generated audio file
-        """
-        try:
-            if not text or not text.strip():
-                raise ValueError("Empty text provided for synthesis")
-            
-            # Ensure output directory exists
-            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            
-            # Select model for language
-            model_name = self.get_model_for_language(language)
-            tts = self.load_model(model_name)
-            
-            logger.info(f"Synthesizing speech for '{language}'")
-            logger.info(f"Text length: {len(text)} characters")
-            
-            # Generate speech
-            if hasattr(tts, 'tts_to_file'):
-                tts.tts_to_file(
-                    text=text,
-                    file_path=output_path,
-                    speaker=speaker,
-                    language=language if "multilingual" in model_name else None
-                )
-            else:
-                # Alternative method for different TTS versions
-                wav = tts.tts(text=text, speaker=speaker)
-                tts.save_wav(wav, output_path)
-            
-            if not Path(output_path).exists():
-                raise FileNotFoundError("TTS failed to generate audio file")
-            
-            file_size = Path(output_path).stat().st_size / 1024  # KB
-            logger.info(f"✅ Speech synthesis complete")
-            logger.info(f"   Output: {Path(output_path).name}")
-            logger.info(f"   Size: {file_size:.1f} KB")
-            
-            return output_path
-
-        except Exception as e:
-            logger.error(f"❌ Coqui TTS synthesis failed: {e}")
-            raise RuntimeError(f"TTS error: {e}")
-
-
-class VoiceSynthesizer:
-    """
-    Unified Voice Synthesizer supporting multiple TTS providers
-    Automatically selects best available provider or uses specified one
-    """
-
-    def __init__(
-        self,
-        provider: Literal["auto", "fish_audio", "coqui"] = "auto",
-        fish_api_key: Optional[str] = None
-    ):
-        """
-        Initialize voice synthesizer with provider selection
-
-        Args:
-            provider: TTS provider ("auto", "fish_audio", "coqui")
-            fish_api_key: Fish Audio API key (required if provider is "fish_audio")
-        """
-        self.provider = provider
-        self.fish_synthesizer = None
-        self.coqui_synthesizer = None
-
-        # Initialize based on provider selection
-        if provider == "fish_audio":
-            if not FISH_AUDIO_AVAILABLE:
-                raise ImportError(
-                    "Fish Audio requested but not installed. "
-                    "Install with: pip install fish-audio-sdk"
-                )
-            self.fish_synthesizer = FishAudioSynthesizer(api_key=fish_api_key)
-            logger.info("🐟 Using Fish Audio as TTS provider")
-
-        elif provider == "coqui":
-            self.coqui_synthesizer = CoquiVoiceSynthesizer()
-            logger.info("🎤 Using Coqui TTS as provider")
-
-        elif provider == "auto":
-            # Auto-select: prefer Fish Audio if available and configured
-            if FISH_AUDIO_AVAILABLE and (fish_api_key or os.getenv("FISH_API_KEY")):
-                try:
-                    self.fish_synthesizer = FishAudioSynthesizer(api_key=fish_api_key)
-                    logger.info("🐟 Auto-selected Fish Audio as TTS provider")
-                except Exception as e:
-                    logger.warning(f"⚠️  Fish Audio initialization failed: {e}")
-                    logger.info("🎤 Falling back to Coqui TTS")
-                    self.coqui_synthesizer = CoquiVoiceSynthesizer()
-            else:
-                self.coqui_synthesizer = CoquiVoiceSynthesizer()
-                logger.info("🎤 Auto-selected Coqui TTS as provider")
-        else:
-            raise ValueError(f"Invalid provider: {provider}. Choose 'auto', 'fish_audio', or 'coqui'")
-
-    def synthesize(
-        self,
-        text: str,
-        output_path: str,
-        language: str = "en",
+        speed: float = 1.0,
         **kwargs
     ) -> str:
         """
-        Synthesize speech using configured provider
+        Synthesize speech from text
 
         Args:
             text: Text to convert to speech
             output_path: Path to save audio file
             language: Target language code
+            speaker: Speaker voice (provider-specific)
+            speed: Speech speed multiplier
             **kwargs: Provider-specific parameters
-                Fish Audio: reference_id, speed, volume, audio_format
-                Coqui: speaker, speed
+                Fish Audio: volume, audio_format, reference_id
+                Fish Speech: emotion, reference_audio, reference_text, streaming
+                Coqui: (none)
 
         Returns:
             Path to generated audio file
         """
-        if self.fish_synthesizer:
-            return self.fish_synthesizer.synthesize(
-                text=text,
-                output_path=output_path,
-                language=language,
-                **kwargs
-            )
-        elif self.coqui_synthesizer:
-            return self.coqui_synthesizer.synthesize(
-                text=text,
-                output_path=output_path,
-                language=language,
-                **kwargs
-            )
-        else:
-            raise RuntimeError("No TTS provider initialized")
+        return self.provider.synthesize(
+            text=text,
+            output_path=output_path,
+            language=language,
+            speaker=speaker,
+            speed=speed,
+            **kwargs
+        )
 
-    def get_provider_info(self) -> dict:
+    def load_model(self, model_name: Optional[str] = None):
+        """
+        Load TTS model
+
+        Args:
+            model_name: Specific model to load
+        """
+        return self.provider.load_model(model_name)
+
+    def get_supported_languages(self) -> List[str]:
+        """
+        Get list of supported languages for current provider
+
+        Returns:
+            List of language codes
+        """
+        return self.provider.get_supported_languages()
+
+    def get_available_voices(self) -> Dict[str, List[str]]:
+        """
+        Get available voices for current provider
+
+        Returns:
+            Dictionary mapping language codes to voice lists
+        """
+        return self.provider.get_available_voices()
+
+    def get_provider_info(self) -> Dict[str, Any]:
         """Get information about active provider"""
-        if self.fish_synthesizer:
-            return {
-                "provider": "fish_audio",
-                "features": ["voice_cloning", "multi_language", "cloud_based"],
-                "account": self.fish_synthesizer.get_account_info()
-            }
-        elif self.coqui_synthesizer:
-            return {
-                "provider": "coqui",
-                "features": ["multi_language", "local_processing"],
-                "device": self.coqui_synthesizer.device,
-                "current_model": self.coqui_synthesizer.current_model
-            }
+        info = {
+            "provider": self.provider_name,
+            "device": self.device
+        }
+
+        # Add provider-specific info
+        if self.provider_name == "fish_audio" and isinstance(self.provider, FishAudioProvider):
+            info["features"] = ["voice_cloning", "multi_language", "cloud_based", "high_quality"]
+            info["account"] = self.provider.get_account_info()
+        elif self.provider_name == "fish_speech" and isinstance(self.provider, FishSpeechProvider):
+            info["features"] = ["voice_cloning", "emotion_synthesis", "streaming", "multilingual", "self_hosted"]
+            info["model"] = self.provider.model
+            info["api_url"] = self.provider.api_url
+        elif self.provider_name == "coqui":
+            info["features"] = ["multi_language", "local_processing", "offline"]
+
+        return info
+
+    def cleanup(self):
+        """Clean up provider resources"""
+        self.provider.cleanup()
+
+    # Fish Speech specific methods
+    def add_reference_voice(
+        self,
+        voice_id: str,
+        audio_path: str,
+        text: Optional[str] = None
+    ) -> bool:
+        """
+        Add a reference voice for voice cloning (Fish Speech only)
+
+        Args:
+            voice_id: Unique identifier for the voice
+            audio_path: Path to reference audio file
+            text: Optional transcript of the reference audio
+
+        Returns:
+            True if successful
+        """
+        if isinstance(self.provider, FishSpeechProvider):
+            return self.provider.add_reference_voice(voice_id, audio_path, text)
         else:
-            return {"provider": "none", "status": "not_initialized"}
+            logger.warning(f"Reference voice not supported by {self.provider_name}")
+            return False
+
+    def list_reference_voices(self) -> List[Dict[str, Any]]:
+        """
+        List available reference voices (Fish Speech only)
+
+        Returns:
+            List of reference voice information
+        """
+        if isinstance(self.provider, FishSpeechProvider):
+            return self.provider.list_reference_voices()
+        else:
+            logger.warning(f"Reference voices not supported by {self.provider_name}")
+            return []
+
+    def get_available_emotions(self) -> List[str]:
+        """
+        Get available emotion markers (Fish Speech only)
+
+        Returns:
+            List of emotion markers
+        """
+        if isinstance(self.provider, FishSpeechProvider):
+            return self.provider.get_available_emotions()
+        else:
+            logger.warning(f"Emotion markers not supported by {self.provider_name}")
+            return []
 
 
-# Global singleton cache (stateless - only caches default provider from env)
+# Global instance
 _synthesizer = None
+_current_provider = None
+_synthesizer_lock = threading.Lock()
 
-def get_synthesizer(
-    provider: Optional[Literal["auto", "fish_audio", "coqui"]] = None,
-    fish_api_key: Optional[str] = None
-) -> VoiceSynthesizer:
+
+def get_synthesizer(provider: Optional[str] = None, **kwargs) -> VoiceSynthesizer:
     """
-    Get or create synthesizer instance (stateless)
-
-    If a provider is specified, creates a new instance for that request.
-    Otherwise, returns a cached instance using the TTS_PROVIDER env var.
+    Get or create global synthesizer instance (thread-safe)
 
     Args:
-        provider: Provider for this request (creates new instance if specified)
-        fish_api_key: Fish Audio API key
+        provider: TTS provider to use (auto, coqui, fish_audio, fish_speech)
+        **kwargs: Provider-specific parameters
 
     Returns:
         VoiceSynthesizer instance
     """
-    global _synthesizer
+    global _synthesizer, _current_provider
 
-    # If provider is explicitly specified, create a fresh instance for this request
-    if provider is not None:
-        return VoiceSynthesizer(provider=provider, fish_api_key=fish_api_key)
+    # Get provider from environment if not specified
+    if provider is None:
+        provider = os.getenv("TTS_PROVIDER", "auto")
 
-    # Otherwise, use global singleton with default from environment
-    if _synthesizer is None:
-        default_provider = os.getenv("TTS_PROVIDER", "auto")
-        _synthesizer = VoiceSynthesizer(provider=default_provider, fish_api_key=fish_api_key)
-    return _synthesizer
+    # Quick check without lock for performance
+    if _synthesizer is not None and _current_provider == provider:
+        return _synthesizer
+
+    # Thread-safe initialization
+    with _synthesizer_lock:
+        # Re-check inside lock to handle race condition
+        if _synthesizer is None or _current_provider != provider:
+            if _synthesizer is not None:
+                _synthesizer.cleanup()
+
+            # Get Fish Audio config from environment
+            if provider in ("auto", "fish_audio"):
+                kwargs.setdefault("api_key", os.getenv("FISH_API_KEY"))
+
+            # Get Fish Speech config from environment
+            if provider in ("auto", "fish_speech"):
+                kwargs.setdefault("api_url", os.getenv("FISH_SPEECH_API_URL", "http://localhost:8080"))
+                kwargs.setdefault("model", os.getenv("FISH_SPEECH_MODEL", "s1-mini"))
+                kwargs.setdefault("compile_mode", os.getenv("FISH_SPEECH_COMPILE", "False").lower() == "true")
+                kwargs.setdefault("max_new_tokens", int(os.getenv("FISH_SPEECH_MAX_NEW_TOKENS", "1024")))
+                kwargs.setdefault("top_p", float(os.getenv("FISH_SPEECH_TOP_P", "0.7")))
+                kwargs.setdefault("temperature", float(os.getenv("FISH_SPEECH_TEMPERATURE", "0.7")))
+                kwargs.setdefault("repetition_penalty", float(os.getenv("FISH_SPEECH_REPETITION_PENALTY", "1.2")))
+
+            _synthesizer = VoiceSynthesizer(provider=provider, **kwargs)
+            _current_provider = provider
+
+        return _synthesizer
+
 
 def synthesize_speech(
     text: str,
     output_path: str,
     language: str = "en",
-    provider: Optional[Literal["auto", "fish_audio", "coqui"]] = None,
+    provider: Optional[str] = None,
     **kwargs
 ) -> str:
     """
@@ -454,8 +485,8 @@ def synthesize_speech(
         text: Text to synthesize
         output_path: Output file path
         language: Target language
-        provider: Override default provider
-        **kwargs: Provider-specific parameters
+        provider: Override default provider (auto, coqui, fish_audio, fish_speech)
+        **kwargs: Additional synthesis parameters
 
     Returns:
         Path to generated audio
