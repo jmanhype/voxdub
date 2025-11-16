@@ -220,7 +220,7 @@ def list_reference_voices():
 
 @router.delete("/voices/{voice_id}")
 def delete_reference_voice(voice_id: str):
-    """Delete a reference voice"""
+    """Delete a reference voice from both server and local storage"""
     try:
         # Sanitize voice ID
         voice_id = sanitize_voice_id(voice_id)
@@ -232,6 +232,18 @@ def delete_reference_voice(voice_id: str):
                 detail="Fish Speech provider not active"
             )
 
+        # Try to delete from Fish Speech server first (best effort)
+        server_deleted = False
+        try:
+            # Note: This assumes the provider has a delete method
+            # If it doesn't exist, we'll catch the exception
+            if hasattr(synthesizer.provider, 'delete_reference_voice'):
+                server_deleted = synthesizer.provider.delete_reference_voice(voice_id)
+                logger.info(f"Deleted voice from server: {voice_id}")
+        except Exception as e:
+            # Log but don't fail - voice might not exist on server
+            logger.warning(f"Could not delete from server (may not exist): {e}")
+
         # Find and delete local files
         deleted_files = []
         for file in REFERENCE_DIR.glob(f"{voice_id}_*"):
@@ -239,14 +251,15 @@ def delete_reference_voice(voice_id: str):
             deleted_files.append(file.name)  # Return only filename, not full path
             logger.info(f"Deleted reference file: {file.name}")
 
-        if not deleted_files:
-            raise HTTPException(404, f"Voice '{voice_id}' not found")
+        if not deleted_files and not server_deleted:
+            raise HTTPException(404, f"Voice '{voice_id}' not found locally or on server")
 
         return {
             "success": True,
             "voice_id": voice_id,
             "deleted_count": len(deleted_files),
-            "message": "Reference voice deleted successfully"
+            "server_deleted": server_deleted,
+            "message": "Reference voice deleted successfully from server and local storage"
         }
 
     except HTTPException:

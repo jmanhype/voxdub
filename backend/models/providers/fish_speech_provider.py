@@ -180,6 +180,39 @@ class FishSpeechProvider(TTSProvider):
             logger.error(f"Error listing reference voices: {e}")
             return []
 
+    def delete_reference_voice(self, voice_id: str) -> bool:
+        """
+        Delete a reference voice from the server
+
+        Args:
+            voice_id: Unique identifier for the voice to delete
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            response = requests.delete(
+                f"{self.api_url}/v1/references/{voice_id}",
+                timeout=10
+            )
+
+            if response.status_code == 200:
+                # Remove from local cache
+                if voice_id in self.reference_voices:
+                    del self.reference_voices[voice_id]
+                logger.info(f"Reference voice '{voice_id}' deleted from server")
+                return True
+            elif response.status_code == 404:
+                logger.warning(f"Voice '{voice_id}' not found on server")
+                return False
+            else:
+                logger.error(f"Failed to delete reference voice: {response.text}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error deleting reference voice: {e}")
+            return False
+
     def _format_text_with_emotion(self, text: str, emotion: Optional[str] = None) -> str:
         """
         Format text with emotion markers
