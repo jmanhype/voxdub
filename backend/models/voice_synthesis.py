@@ -5,6 +5,7 @@ Generates natural-sounding speech from text using various TTS engines
 
 import os
 import torch
+import threading
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 import logging
@@ -184,11 +185,12 @@ class VoiceSynthesizer:
 # Global instance
 _synthesizer = None
 _current_provider = None
+_synthesizer_lock = threading.Lock()
 
 
 def get_synthesizer(provider: Optional[str] = None, **kwargs) -> VoiceSynthesizer:
     """
-    Get or create global synthesizer instance
+    Get or create global synthesizer instance (thread-safe)
 
     Args:
         provider: TTS provider to use
@@ -203,25 +205,31 @@ def get_synthesizer(provider: Optional[str] = None, **kwargs) -> VoiceSynthesize
     if provider is None:
         provider = os.getenv("TTS_PROVIDER", "coqui")
 
-    # Recreate if provider changed or doesn't exist
-    if _synthesizer is None or _current_provider != provider:
-        if _synthesizer is not None:
-            _synthesizer.cleanup()
+    # Quick check without lock for performance
+    if _synthesizer is not None and _current_provider == provider:
+        return _synthesizer
 
-        # Get Fish Speech config from environment if using Fish Speech
-        if provider == "fish_speech":
-            kwargs.setdefault("api_url", os.getenv("FISH_SPEECH_API_URL", "http://localhost:8080"))
-            kwargs.setdefault("model", os.getenv("FISH_SPEECH_MODEL", "s1-mini"))
-            kwargs.setdefault("compile_mode", os.getenv("FISH_SPEECH_COMPILE", "False").lower() == "true")
-            kwargs.setdefault("max_new_tokens", int(os.getenv("FISH_SPEECH_MAX_NEW_TOKENS", "1024")))
-            kwargs.setdefault("top_p", float(os.getenv("FISH_SPEECH_TOP_P", "0.7")))
-            kwargs.setdefault("temperature", float(os.getenv("FISH_SPEECH_TEMPERATURE", "0.7")))
-            kwargs.setdefault("repetition_penalty", float(os.getenv("FISH_SPEECH_REPETITION_PENALTY", "1.2")))
+    # Thread-safe initialization
+    with _synthesizer_lock:
+        # Re-check inside lock to handle race condition
+        if _synthesizer is None or _current_provider != provider:
+            if _synthesizer is not None:
+                _synthesizer.cleanup()
 
-        _synthesizer = VoiceSynthesizer(provider=provider, **kwargs)
-        _current_provider = provider
+            # Get Fish Speech config from environment if using Fish Speech
+            if provider == "fish_speech":
+                kwargs.setdefault("api_url", os.getenv("FISH_SPEECH_API_URL", "http://localhost:8080"))
+                kwargs.setdefault("model", os.getenv("FISH_SPEECH_MODEL", "s1-mini"))
+                kwargs.setdefault("compile_mode", os.getenv("FISH_SPEECH_COMPILE", "False").lower() == "true")
+                kwargs.setdefault("max_new_tokens", int(os.getenv("FISH_SPEECH_MAX_NEW_TOKENS", "1024")))
+                kwargs.setdefault("top_p", float(os.getenv("FISH_SPEECH_TOP_P", "0.7")))
+                kwargs.setdefault("temperature", float(os.getenv("FISH_SPEECH_TEMPERATURE", "0.7")))
+                kwargs.setdefault("repetition_penalty", float(os.getenv("FISH_SPEECH_REPETITION_PENALTY", "1.2")))
 
-    return _synthesizer
+            _synthesizer = VoiceSynthesizer(provider=provider, **kwargs)
+            _current_provider = provider
+
+        return _synthesizer
 
 
 def synthesize_speech(

@@ -255,26 +255,29 @@ class FishSpeechProvider(TTSProvider):
                 "repetition_penalty": self.repetition_penalty
             }
 
-            # Add reference voice if specified
-            files = None
+            # Add reference voice if specified and make API request
             if reference_audio and Path(reference_audio).exists():
-                files = {'reference_audio': open(reference_audio, 'rb')}
-                if reference_text:
-                    payload['reference_text'] = reference_text
                 logger.info(f"Using reference audio for voice cloning")
-            elif speaker and speaker in self.reference_voices:
-                payload['voice_id'] = speaker
-                logger.info(f"Using registered voice: {speaker}")
+                with open(reference_audio, 'rb') as ref_audio_file:
+                    files = {'reference_audio': ref_audio_file}
+                    if reference_text:
+                        payload['reference_text'] = reference_text
 
-            # Make API request
-            if streaming:
-                audio_data = self._synthesize_streaming(payload, files)
+                    # Make API request with file
+                    if streaming:
+                        audio_data = self._synthesize_streaming(payload, files)
+                    else:
+                        audio_data = self._synthesize_non_streaming(payload, files)
             else:
-                audio_data = self._synthesize_non_streaming(payload, files)
+                # Make API request without file
+                if speaker and speaker in self.reference_voices:
+                    payload['voice_id'] = speaker
+                    logger.info(f"Using registered voice: {speaker}")
 
-            # Close file handle if opened
-            if files:
-                files['reference_audio'].close()
+                if streaming:
+                    audio_data = self._synthesize_streaming(payload, None)
+                else:
+                    audio_data = self._synthesize_non_streaming(payload, None)
 
             # Save audio to file
             if isinstance(audio_data, bytes):

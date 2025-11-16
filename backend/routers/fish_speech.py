@@ -1,18 +1,29 @@
 """
 Fish Speech TTS API Endpoints
-Enhanced TTS features for voice cloning and emotion synthesis
+Enhanced TTS features for voice cloning and emotion synthesis with security
 """
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse
-from typing import Optional, List, Dict, Any
+from fastapi.responses import FileResponse
+from typing import Optional
 from pathlib import Path
 import uuid
-import os
-from pydantic import BaseModel
+import logging
+from pydantic import BaseModel, validator
 
 from models.voice_synthesis import get_synthesizer
 from models.providers import FishSpeechProvider
+from utils.security import (
+    validate_audio_file,
+    generate_secure_filename,
+    sanitize_voice_id,
+    validate_text_input,
+    validate_language_code,
+    validate_emotion,
+    MAX_REFERENCE_AUDIO_SIZE
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/fish-speech",
@@ -22,10 +33,12 @@ router = APIRouter(
 # Reference audio storage
 REFERENCE_DIR = Path("references")
 REFERENCE_DIR.mkdir(exist_ok=True)
+TEMP_DIR = Path("temp")
+TEMP_DIR.mkdir(exist_ok=True)
 
 
 class TTSRequest(BaseModel):
-    """TTS generation request"""
+    """TTS generation request with validation"""
     text: str
     language: str = "en"
     emotion: Optional[str] = None
@@ -33,21 +46,20 @@ class TTSRequest(BaseModel):
     streaming: bool = False
     speed: float = 1.0
 
+    @validator('text')
+    def validate_text(cls, v):
+        return validate_text_input(v, max_length=5000)
 
-class VoiceCloneRequest(BaseModel):
-    """Voice cloning request"""
-    text: str
-    language: str = "en"
-    emotion: Optional[str] = None
-    reference_text: Optional[str] = None
-    streaming: bool = False
+    @validator('speed')
+    def validate_speed(cls, v):
+        if not 0.5 <= v <= 2.0:
+            raise ValueError('Speed must be between 0.5 and 2.0')
+        return v
 
 
 @router.get("/info")
 def get_fish_speech_info():
-    """
-    Get Fish Speech TTS provider information
-    """
+    """Get Fish Speech TTS provider information"""
     try:
         synthesizer = get_synthesizer()
 
@@ -63,7 +75,6 @@ def get_fish_speech_info():
             "enabled": True,
             "provider": "fish_speech",
             "model": synthesizer.provider.model,
-            "api_url": synthesizer.provider.api_url,
             "supported_languages": synthesizer.get_supported_languages(),
             "available_emotions": synthesizer.get_available_emotions(),
             "features": {
@@ -79,14 +90,13 @@ def get_fish_speech_info():
             }
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error getting info: {str(e)}")
+        logger.error(f"Error getting Fish Speech info: {e}")
+        raise HTTPException(status_code=500, detail="Failed to get provider information")
 
 
 @router.get("/emotions")
 def get_available_emotions():
-    """
-    Get list of available emotion markers
-    """
+    """Get list of available emotion markers"""
     try:
         synthesizer = get_synthesizer()
 
@@ -109,7 +119,8 @@ def get_available_emotions():
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error: {str(e)}")
+        logger.error(f"Error getting emotions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve emotions")
 
 
 @router.post("/voices/add")
@@ -124,6 +135,7 @@ async def add_reference_voice(
     Upload a reference audio sample to create a custom voice.
     The audio should be clear, 3-30 seconds long, and contain the target voice.
     """
+    audio_path = None
     try:
         synthesizer = get_synthesizer()
 
@@ -133,18 +145,21 @@ async def add_reference_voice(
                 detail="Fish Speech provider not active. Set TTS_PROVIDER=fish_speech"
             )
 
-        # Validate file type
-        if not audio.filename.endswith(('.wav', '.mp3', '.flac', '.ogg')):
-            raise HTTPException(
-                status_code=400,
-                detail="Only audio files are supported (.wav, .mp3, .flac, .ogg)"
-            )
+        # Sanitize voice ID
+        voice_id = sanitize_voice_id(voice_id)
 
-        # Save reference audio
-        audio_path = REFERENCE_DIR / f"{voice_id}_{audio.filename}"
+        # Validate audio file with MIME type checking
+        content, mime_type = await validate_audio_file(audio, MAX_REFERENCE_AUDIO_SIZE)
+
+        # Generate secure filename
+        secure_filename = generate_secure_filename(audio.filename or "audio.wav", prefix=voice_id)
+        audio_path = REFERENCE_DIR / secure_filename
+
+        # Save validated audio
         with open(audio_path, "wb") as f:
-            content = await audio.read()
             f.write(content)
+
+        logger.info(f"Saved reference audio: {secure_filename} ({len(content)} bytes, {mime_type})")
 
         # Add to Fish Speech
         success = synthesizer.add_reference_voice(
@@ -170,14 +185,16 @@ async def add_reference_voice(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error adding voice: {str(e)}")
+        # Cleanup on error
+        if audio_path and audio_path.exists():
+            audio_path.unlink(missing_ok=True)
+        logger.error(f"Error adding voice: {e}")
+        raise HTTPException(status_code=500, detail="Failed to add reference voice")
 
 
 @router.get("/voices/list")
 def list_reference_voices():
-    """
-    List all available reference voices
-    """
+    """List all available reference voices"""
     try:
         synthesizer = get_synthesizer()
 
@@ -197,20 +214,30 @@ def list_reference_voices():
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error listing voices: {str(e)}")
+        logger.error(f"Error listing voices: {e}")
+        raise HTTPException(status_code=500, detail="Failed to list voices")
 
 
 @router.delete("/voices/{voice_id}")
 def delete_reference_voice(voice_id: str):
-    """
-    Delete a reference voice
-    """
+    """Delete a reference voice"""
     try:
-        # Find and delete local file
+        # Sanitize voice ID
+        voice_id = sanitize_voice_id(voice_id)
+
+        synthesizer = get_synthesizer()
+        if not isinstance(synthesizer.provider, FishSpeechProvider):
+            raise HTTPException(
+                status_code=400,
+                detail="Fish Speech provider not active"
+            )
+
+        # Find and delete local files
         deleted_files = []
         for file in REFERENCE_DIR.glob(f"{voice_id}_*"):
             file.unlink()
-            deleted_files.append(str(file))
+            deleted_files.append(file.name)  # Return only filename, not full path
+            logger.info(f"Deleted reference file: {file.name}")
 
         if not deleted_files:
             raise HTTPException(404, f"Voice '{voice_id}' not found")
@@ -218,14 +245,15 @@ def delete_reference_voice(voice_id: str):
         return {
             "success": True,
             "voice_id": voice_id,
-            "deleted_files": deleted_files,
+            "deleted_count": len(deleted_files),
             "message": "Reference voice deleted successfully"
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error deleting voice: {str(e)}")
+        logger.error(f"Error deleting voice: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete voice")
 
 
 @router.post("/synthesize")
@@ -248,39 +276,52 @@ async def synthesize_with_fish_speech(request: TTSRequest):
                 detail="Fish Speech provider not active. Set TTS_PROVIDER=fish_speech"
             )
 
-        # Generate output path
+        # Validate language
+        language = validate_language_code(
+            request.language,
+            synthesizer.get_supported_languages()
+        )
+
+        # Validate emotion
+        emotion = validate_emotion(
+            request.emotion,
+            synthesizer.get_available_emotions()
+        )
+
+        # Generate secure output path
         output_id = str(uuid.uuid4())
-        output_path = Path("temp") / f"{output_id}_synthesized.wav"
-        output_path.parent.mkdir(exist_ok=True)
+        output_path = TEMP_DIR / f"{output_id}_synthesized.wav"
 
         # Synthesize
         result_path = synthesizer.synthesize(
             text=request.text,
             output_path=str(output_path),
-            language=request.language,
+            language=language,
             speaker=request.voice_id,
             speed=request.speed,
-            emotion=request.emotion,
+            emotion=emotion,
             streaming=request.streaming
         )
 
         file_size = Path(result_path).stat().st_size / 1024
 
+        logger.info(f"Synthesized speech: {output_id} ({file_size:.1f} KB)")
+
         return {
             "success": True,
             "output_id": output_id,
-            "file_path": result_path,
             "file_size_kb": round(file_size, 2),
             "text_length": len(request.text),
-            "language": request.language,
-            "emotion": request.emotion,
+            "language": language,
+            "emotion": emotion,
             "download_url": f"/api/fish-speech/download/{output_id}"
         }
 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Synthesis failed: {str(e)}")
+        logger.error(f"Synthesis failed: {e}")
+        raise HTTPException(status_code=500, detail="Speech synthesis failed")
 
 
 @router.post("/clone-voice")
@@ -298,6 +339,7 @@ async def clone_voice_and_synthesize(
     Upload a reference audio and generate speech with that voice.
     No need to register the voice - it's used directly for this request.
     """
+    ref_path = None
     try:
         synthesizer = get_synthesizer()
 
@@ -307,21 +349,32 @@ async def clone_voice_and_synthesize(
                 detail="Fish Speech provider not active"
             )
 
-        # Validate audio file
-        if not audio.filename.endswith(('.wav', '.mp3', '.flac', '.ogg')):
-            raise HTTPException(400, "Only audio files supported")
+        # Validate inputs
+        text = validate_text_input(text, max_length=5000)
+        language = validate_language_code(
+            language,
+            synthesizer.get_supported_languages()
+        )
+        emotion = validate_emotion(
+            emotion,
+            synthesizer.get_available_emotions()
+        )
 
-        # Save temporary reference audio
+        # Validate reference audio with MIME type checking
+        content, mime_type = await validate_audio_file(audio, MAX_REFERENCE_AUDIO_SIZE)
+
+        # Save temporary reference audio with secure filename
         temp_id = str(uuid.uuid4())
-        ref_path = Path("temp") / f"{temp_id}_reference.wav"
-        ref_path.parent.mkdir(exist_ok=True)
+        secure_ref_filename = generate_secure_filename(audio.filename or "reference.wav")
+        ref_path = TEMP_DIR / secure_ref_filename
 
         with open(ref_path, "wb") as f:
-            content = await audio.read()
             f.write(content)
 
-        # Generate output path
-        output_path = Path("temp") / f"{temp_id}_cloned.wav"
+        logger.info(f"Saved temp reference: {secure_ref_filename} ({len(content)} bytes)")
+
+        # Generate secure output path
+        output_path = TEMP_DIR / f"{temp_id}_cloned.wav"
 
         # Synthesize with voice cloning
         result_path = synthesizer.synthesize(
@@ -334,15 +387,13 @@ async def clone_voice_and_synthesize(
             streaming=streaming
         )
 
-        # Cleanup reference audio
-        ref_path.unlink(missing_ok=True)
-
         file_size = Path(result_path).stat().st_size / 1024
+
+        logger.info(f"Voice cloning complete: {temp_id} ({file_size:.1f} KB)")
 
         return {
             "success": True,
             "output_id": temp_id,
-            "file_path": result_path,
             "file_size_kb": round(file_size, 2),
             "text_length": len(text),
             "language": language,
@@ -354,26 +405,31 @@ async def clone_voice_and_synthesize(
     except HTTPException:
         raise
     except Exception as e:
-        # Cleanup on error
-        if 'ref_path' in locals():
-            Path(ref_path).unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Voice cloning failed: {str(e)}")
+        logger.error(f"Voice cloning failed: {e}")
+        raise HTTPException(status_code=500, detail="Voice cloning failed")
+    finally:
+        # Always cleanup reference audio
+        if ref_path and ref_path.exists():
+            ref_path.unlink(missing_ok=True)
 
 
 @router.get("/download/{output_id}")
 def download_synthesized_audio(output_id: str):
-    """
-    Download synthesized audio file
-    """
-    from fastapi.responses import FileResponse
-
-    # Find the file
-    temp_dir = Path("temp")
+    """Download synthesized audio file"""
+    # Validate output_id format (UUID)
+    try:
+        uuid.UUID(output_id)
+    except ValueError:
+        raise HTTPException(400, "Invalid output ID format")
 
     # Try different suffixes
     for suffix in ["_synthesized.wav", "_cloned.wav"]:
-        file_path = temp_dir / f"{output_id}{suffix}"
+        file_path = TEMP_DIR / f"{output_id}{suffix}"
         if file_path.exists():
+            # Verify file is within temp directory (prevent path traversal)
+            if not file_path.resolve().parent == TEMP_DIR.resolve():
+                raise HTTPException(403, "Access denied")
+
             return FileResponse(
                 path=file_path,
                 filename=f"fish_speech_{output_id}.wav",
@@ -385,9 +441,7 @@ def download_synthesized_audio(output_id: str):
 
 @router.get("/health")
 def check_fish_speech_health():
-    """
-    Check Fish Speech API server health
-    """
+    """Check Fish Speech API server health"""
     try:
         synthesizer = get_synthesizer()
 
@@ -405,13 +459,12 @@ def check_fish_speech_health():
             "status": "healthy",
             "provider": "fish_speech",
             "model": synthesizer.provider.model,
-            "api_url": synthesizer.provider.api_url,
             "message": "Fish Speech API is running"
         }
 
     except Exception as e:
+        logger.error(f"Health check failed: {e}")
         return {
             "status": "unhealthy",
-            "error": str(e),
             "message": "Fish Speech API is not accessible"
         }
