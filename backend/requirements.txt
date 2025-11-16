@@ -13,6 +13,10 @@ pillow==10.1.0
 TTS==0.21.1
 openai-whisper==20231117
 
+# Fish Audio SDK TTS (optional - requires API key)
+# Get your API key at: https://fish.audio/app/api-keys
+fish-audio-sdk>=1.0.0
+
 # Fish Speech HTTP Client Dependencies (server runs separately)
 # Note: Fish Speech server dependencies are managed by scripts/setup_fish_speech.sh
 python-magic==0.4.27  # For secure MIME type validation
